@@ -17,6 +17,7 @@
 		A0000000000000000000000A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000A /* Assets.xcassets */; };
 		A0000000000000000000000B /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000B /* PrivacyInfo.xcprivacy */; };
 		A0000000000000000000000C /* RideLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000C /* RideLogicTests.swift */; };
+		A0000000000000000000000D /* NotificationReliabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000D /* NotificationReliabilityTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,6 +43,7 @@
 		F0000000000000000000000A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F0000000000000000000000B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		F0000000000000000000000C /* RideLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RideLogicTests.swift; sourceTree = "<group>"; };
+		F0000000000000000000000D /* NotificationReliabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationReliabilityTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,6 +90,7 @@
 			isa = PBXGroup;
 			children = (
 				F0000000000000000000000C /* RideLogicTests.swift */,
+				F0000000000000000000000D /* NotificationReliabilityTests.swift */,
 			);
 			path = BikeGuardTests;
 			sourceTree = "<group>";
@@ -227,6 +230,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A0000000000000000000000C /* RideLogicTests.swift in Sources */,
+				A0000000000000000000000D /* NotificationReliabilityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

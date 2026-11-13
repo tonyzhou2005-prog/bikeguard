@@ -1,6 +1,6 @@
 import Foundation
 
-protocol RideStoring: AnyObject {
+protocol RideStoring: AnyObject, Sendable {
     func load() -> RideSession?
     func save(_ session: RideSession?)
 }
@@ -19,7 +19,7 @@ enum RideCoding {
     }()
 }
 
-final class MemoryRideStore: RideStoring {
+final class MemoryRideStore: RideStoring, @unchecked Sendable {
     private var session: RideSession?
 
     func load() -> RideSession? { session }
@@ -29,7 +29,7 @@ final class MemoryRideStore: RideStoring {
     }
 }
 
-final class UserDefaultsRideStore: RideStoring {
+final class UserDefaultsRideStore: RideStoring, @unchecked Sendable {
     static let storageKey = "bikeguard.rideSession.v1"
 
     private let defaults: UserDefaults

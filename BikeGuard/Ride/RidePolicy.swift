@@ -73,7 +73,7 @@ enum RidePolicy {
         if isActive(existing, now: now), let existing {
             return StartDecision(outcome: .alreadyActive, session: existing, remindersToSchedule: [])
         }
-        let session = RideSession(startedAt: now, endedAt: nil)
+        let session = RideSession(startedAt: now, endedAt: nil, registration: .pending)
         return StartDecision(
             outcome: .started,
             session: session,
@@ -90,9 +90,55 @@ enum RidePolicy {
     }
 }
 
-struct RideSession: Codable, Equatable {
+/// Whether the system accepted this ride's future reminders.
+/// `.pending` means a start was saved but registration was not confirmed,
+/// including a process death between the save and `add`.
+enum ReminderRegistration: Codable, Equatable, Sendable {
+    case pending
+    case partial(succeededOffsets: [TimeInterval])
+    case complete
+}
+
+struct RideSession: Codable, Equatable, Sendable {
+    var id: UUID
     var startedAt: Date
     var endedAt: Date?
+    var registration: ReminderRegistration
+
+    init(
+        id: UUID = UUID(),
+        startedAt: Date,
+        endedAt: Date? = nil,
+        registration: ReminderRegistration = .pending
+    ) {
+        self.id = id
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.registration = registration
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case startedAt
+        case endedAt
+        case registration
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        endedAt = try container.decodeIfPresent(Date.self, forKey: .endedAt)
+        registration = try container.decodeIfPresent(ReminderRegistration.self, forKey: .registration) ?? .pending
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(startedAt, forKey: .startedAt)
+        try container.encodeIfPresent(endedAt, forKey: .endedAt)
+        try container.encode(registration, forKey: .registration)
+    }
 }
 
 enum RidePhase: Equatable {
@@ -111,7 +157,7 @@ struct RideReminderPlan: Equatable {
     var body: String
 }
 
-enum StartOutcome: Equatable {
+enum StartOutcome: Equatable, Sendable {
     case started
     case alreadyActive
 }

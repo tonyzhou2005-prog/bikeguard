@@ -1,22 +1,36 @@
 import XCTest
 @testable import BikeGuard
 
-final class ManualClock: RideClock {
+final class ManualClock: RideClock, @unchecked Sendable {
     var date: Date
     init(date: Date) { self.date = date }
     func now() -> Date { date }
 }
 
-final class RecordingReminderScheduler: RideReminderScheduling {
-    private(set) var scheduled: [[RideReminderPlan]] = []
+final class RecordingNotificationCenter: RideNotificationCenter, @unchecked Sendable {
+    private(set) var pending: [RideNotificationRequest] = []
     private(set) var cancelCount = 0
+    private(set) var additionCount = 0
 
-    func replaceReminders(with reminders: [RideReminderPlan]) {
-        scheduled.append(reminders)
+    func pendingIdentifiers() async -> Set<String> {
+        Set(pending.map(\.identifier))
     }
 
-    func cancelReminders() {
+    func removePending(identifiers: [String]) async {
+        pending.removeAll { identifiers.contains($0.identifier) }
+    }
+
+    func removeDelivered(identifiers: [String]) async {}
+
+    func add(_ request: RideNotificationRequest) async throws {
+        additionCount += 1
+        pending.removeAll { $0.identifier == request.identifier }
+        pending.append(request)
+    }
+
+    func cancelReminders() async {
         cancelCount += 1
+        pending.removeAll()
     }
 }
 
@@ -179,95 +193,113 @@ final class RidePolicyTests: XCTestCase {
 final class RideEngineTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
-    func testStartPersistsAndSchedulesOnce() {
-        let scheduler = RecordingReminderScheduler()
+    func testStartPersistsAndSchedulesOnce() async {
+        let scheduler = RecordingNotificationCenter()
         let (engine, _) = makeEngine(now: start, scheduler: scheduler)
-        XCTAssertEqual(engine.start(), .started)
+        let result = await engine.start()
+        XCTAssertEqual(result.outcome, .started)
+        XCTAssertEqual(result.registration.status, .full)
         let snapshot = engine.snapshot()
-        XCTAssertEqual(snapshot.session, RideSession(startedAt: start, endedAt: nil))
+        XCTAssertEqual(snapshot.session?.startedAt, start)
+        XCTAssertNil(snapshot.session?.endedAt)
+        XCTAssertEqual(snapshot.session?.registration, .complete)
         XCTAssertEqual(snapshot.phase, .riding(remaining: 60 * 60))
         XCTAssertEqual(snapshot.remaining, 60 * 60, accuracy: 0.001)
-        XCTAssertEqual(scheduler.scheduled.count, 1)
-        XCTAssertEqual(scheduler.scheduled[0].map(\.offset), [45 * 60, 50 * 60, 55 * 60])
+        XCTAssertEqual(scheduler.pending.map(\.offset), [45 * 60, 50 * 60, 55 * 60])
+        XCTAssertEqual(scheduler.additionCount, 3)
         XCTAssertEqual(scheduler.cancelCount, 0)
     }
 
-    func testIdempotentRestartKeepsOriginalStartAndDoesNotReschedule() {
-        let scheduler = RecordingReminderScheduler()
+    func testIdempotentRestartKeepsOriginalStartAndDoesNotReschedule() async {
+        let scheduler = RecordingNotificationCenter()
         let (engine, clock) = makeEngine(now: start, scheduler: scheduler)
-        XCTAssertEqual(engine.start(), .started)
+        XCTAssertEqual((await engine.start()).outcome, .started)
         clock.date = start.addingTimeInterval(20 * 60)
-        XCTAssertEqual(engine.start(), .alreadyActive)
+        let second = await engine.start()
+        XCTAssertEqual(second.outcome, .alreadyActive)
+        XCTAssertTrue(second.registration.addedOffsets.isEmpty)
         clock.date = start.addingTimeInterval(70 * 60)
-        XCTAssertEqual(engine.start(), .alreadyActive)
+        let third = await engine.start()
+        XCTAssertEqual(third.outcome, .alreadyActive)
+        XCTAssertTrue(third.registration.addedOffsets.isEmpty)
         XCTAssertEqual(engine.snapshot().session?.startedAt, start)
         XCTAssertNil(engine.snapshot().session?.endedAt)
         XCTAssertEqual(engine.snapshot().remaining, 0, accuracy: 0.001)
-        XCTAssertEqual(scheduler.scheduled.count, 1, "a second start must not schedule another set")
+        XCTAssertEqual(scheduler.additionCount, 3, "a second start must not schedule another set")
         XCTAssertEqual(scheduler.cancelCount, 0)
     }
 
-    func testEndCancelsRemindersAndPersists() {
-        let scheduler = RecordingReminderScheduler()
+    func testEndCancelsRemindersAndPersists() async {
+        let scheduler = RecordingNotificationCenter()
         let (engine, clock) = makeEngine(now: start, scheduler: scheduler)
-        XCTAssertEqual(engine.start(), .started)
+        XCTAssertEqual((await engine.start()).outcome, .started)
         clock.date = start.addingTimeInterval(15 * 60)
-        XCTAssertTrue(engine.end())
+        XCTAssertTrue(await engine.end())
         let snapshot = engine.snapshot()
         XCTAssertEqual(snapshot.phase, .endedManually)
         XCTAssertEqual(snapshot.session?.endedAt, clock.date)
         XCTAssertEqual(snapshot.remaining, 0, accuracy: 0.001)
         XCTAssertFalse(snapshot.isActive)
         XCTAssertEqual(scheduler.cancelCount, 1)
-        XCTAssertFalse(engine.end())
+        XCTAssertTrue(scheduler.pending.isEmpty)
+        XCTAssertFalse(await engine.end())
         XCTAssertEqual(scheduler.cancelCount, 1)
     }
 
-    func testEndWhenInactiveIsNoOp() {
-        let scheduler = RecordingReminderScheduler()
+    func testEndWhenInactiveIsNoOp() async {
+        let scheduler = RecordingNotificationCenter()
         let (engine, _) = makeEngine(now: start, scheduler: scheduler)
-        XCTAssertFalse(engine.end())
+        XCTAssertFalse(await engine.end())
         XCTAssertEqual(scheduler.cancelCount, 0)
-        XCTAssertEqual(scheduler.scheduled.count, 0)
+        XCTAssertTrue(scheduler.pending.isEmpty)
+        XCTAssertEqual(scheduler.additionCount, 0)
         XCTAssertEqual(engine.snapshot().phase, .idle)
     }
 
-    func testEndDuringGraceStillCancels() {
-        let scheduler = RecordingReminderScheduler()
+    func testEndDuringGraceStillCancels() async {
+        let scheduler = RecordingNotificationCenter()
         let (engine, clock) = makeEngine(now: start, scheduler: scheduler)
-        engine.start()
+        _ = await engine.start()
         clock.date = start.addingTimeInterval(80 * 60)
         XCTAssertTrue(engine.snapshot().isActive)
-        XCTAssertTrue(engine.end())
+        XCTAssertTrue(await engine.end())
         XCTAssertEqual(engine.snapshot().phase, .endedManually)
         XCTAssertEqual(scheduler.cancelCount, 1)
     }
 
-    func testNewStartAfterEndOrExpirySchedulesFreshReminders() {
-        let scheduler = RecordingReminderScheduler()
+    func testNewStartAfterEndOrExpirySchedulesFreshReminders() async {
+        let scheduler = RecordingNotificationCenter()
         let (engine, clock) = makeEngine(now: start, scheduler: scheduler)
-        engine.start()
+        _ = await engine.start()
         clock.date = start.addingTimeInterval(5 * 60)
-        XCTAssertTrue(engine.end())
+        XCTAssertTrue(await engine.end())
         clock.date = start.addingTimeInterval(6 * 60)
-        XCTAssertEqual(engine.start(), .started)
+        XCTAssertEqual((await engine.start()).outcome, .started)
         XCTAssertEqual(engine.snapshot().session?.startedAt, clock.date)
-        XCTAssertEqual(scheduler.scheduled.count, 2)
-        XCTAssertEqual(scheduler.scheduled[1][0].fireAt, clock.date.addingTimeInterval(45 * 60))
+        XCTAssertEqual(scheduler.pending.map(\.fireAt), [
+            clock.date.addingTimeInterval(45 * 60),
+            clock.date.addingTimeInterval(50 * 60),
+            clock.date.addingTimeInterval(55 * 60)
+        ])
 
         clock.date = clock.date.addingTimeInterval(90 * 60)
         XCTAssertEqual(engine.snapshot().phase, .expiredAutomatically)
         let newStart = clock.date
-        XCTAssertEqual(engine.start(), .started)
+        XCTAssertEqual((await engine.start()).outcome, .started)
         XCTAssertEqual(engine.snapshot().session?.startedAt, newStart)
-        XCTAssertEqual(scheduler.scheduled.count, 3)
+        XCTAssertEqual(scheduler.pending.map(\.fireAt), [
+            newStart.addingTimeInterval(45 * 60),
+            newStart.addingTimeInterval(50 * 60),
+            newStart.addingTimeInterval(55 * 60)
+        ])
         XCTAssertEqual(scheduler.cancelCount, 1)
+        XCTAssertEqual(scheduler.additionCount, 9)
     }
 
-    func testRemainingTimeFollowsInjectedClock() {
-        let scheduler = RecordingReminderScheduler()
+    func testRemainingTimeFollowsInjectedClock() async {
+        let scheduler = RecordingNotificationCenter()
         let (engine, clock) = makeEngine(now: start, scheduler: scheduler)
-        engine.start()
+        _ = await engine.start()
         clock.date = start.addingTimeInterval(15 * 60)
         XCTAssertEqual(engine.snapshot().remaining, 45 * 60, accuracy: 0.001)
         clock.date = start.addingTimeInterval(55 * 60)
@@ -277,32 +309,37 @@ final class RideEngineTests: XCTestCase {
         XCTAssertEqual(engine.snapshot().phase, .grace(overtime: 0))
     }
 
-    func testUserDefaultsRoundTripRestoresRemainingTime() throws {
+    func testUserDefaultsRoundTripRestoresRemainingTime() async throws {
         let suite = "BikeGuardTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        let scheduler = RecordingReminderScheduler()
+        let scheduler = RecordingNotificationCenter()
         let clock = ManualClock(date: start)
         let store = UserDefaultsRideStore(defaults: defaults)
         let lock = FileManager.default.temporaryDirectory.appendingPathComponent("bikeguard-\(UUID().uuidString).lock")
-        let engine = RideEngine(store: store, clock: clock, reminders: scheduler, lockURL: lock)
-        XCTAssertEqual(engine.start(), .started)
+        let engine = RideEngine(store: store, clock: clock, center: scheduler, lockURL: lock)
+        XCTAssertEqual((await engine.start()).outcome, .started)
 
         let data = try XCTUnwrap(defaults.data(forKey: UserDefaultsRideStore.storageKey))
         let decoded = try RideCoding.decoder.decode(RideSession.self, from: data)
-        XCTAssertEqual(decoded, RideSession(startedAt: start, endedAt: nil))
+        XCTAssertEqual(decoded.startedAt, start)
+        XCTAssertNil(decoded.endedAt)
+        XCTAssertEqual(decoded.registration, .complete)
 
         clock.date = start.addingTimeInterval(20 * 60)
         let restoredStore = UserDefaultsRideStore(defaults: defaults)
-        let restoredScheduler = RecordingReminderScheduler()
-        let restored = RideEngine(store: restoredStore, clock: clock, reminders: restoredScheduler, lockURL: lock)
+        let restoredScheduler = RecordingNotificationCenter()
+        let restored = RideEngine(store: restoredStore, clock: clock, center: restoredScheduler, lockURL: lock)
         XCTAssertEqual(restored.snapshot().session?.startedAt, start)
+        XCTAssertEqual(restored.snapshot().session?.id, decoded.id)
         XCTAssertEqual(restored.snapshot().remaining, 40 * 60, accuracy: 0.001)
-        XCTAssertEqual(restored.start(), .alreadyActive)
-        XCTAssertTrue(restoredScheduler.scheduled.isEmpty)
-        XCTAssertEqual(scheduler.scheduled.count, 1)
+        let again = await restored.start()
+        XCTAssertEqual(again.outcome, .alreadyActive)
+        XCTAssertEqual(restored.snapshot().session?.startedAt, start)
+        XCTAssertEqual(restoredScheduler.pending.map(\.offset), [45 * 60, 50 * 60, 55 * 60])
+        XCTAssertEqual(scheduler.additionCount, 3)
     }
 
     func testCorruptPersistenceIsTreatedAsNoRide() throws {
@@ -315,33 +352,30 @@ final class RideEngineTests: XCTestCase {
         XCTAssertNil(store.load())
     }
 
-    func testMemoryStoreRoundTripAcrossEngines() {
+    func testMemoryStoreRoundTripAcrossEngines() async {
         let store = MemoryRideStore()
         let clock = ManualClock(date: start)
-        let firstScheduler = RecordingReminderScheduler()
+        let firstScheduler = RecordingNotificationCenter()
         let lock = FileManager.default.temporaryDirectory.appendingPathComponent("bikeguard-\(UUID().uuidString).lock")
-        let first = RideEngine(store: store, clock: clock, reminders: firstScheduler, lockURL: lock)
-        first.start()
+        let first = RideEngine(store: store, clock: clock, center: firstScheduler, lockURL: lock)
+        _ = await first.start()
         clock.date = start.addingTimeInterval(25 * 60)
-        let second = RideEngine(
-            store: store,
-            clock: clock,
-            reminders: RecordingReminderScheduler(),
-            lockURL: lock
-        )
+        let secondCenter = RecordingNotificationCenter()
+        let second = RideEngine(store: store, clock: clock, center: secondCenter, lockURL: lock)
         XCTAssertEqual(second.snapshot().session?.startedAt, start)
         XCTAssertEqual(second.snapshot().remaining, 35 * 60, accuracy: 0.001)
-        XCTAssertEqual(second.start(), .alreadyActive)
+        XCTAssertEqual((await second.start()).outcome, .alreadyActive)
+        XCTAssertEqual(second.snapshot().session?.startedAt, start)
     }
 
     private func makeEngine(
         now: Date,
-        scheduler: RecordingReminderScheduler,
+        scheduler: RecordingNotificationCenter,
         store: RideStoring = MemoryRideStore()
     ) -> (RideEngine, ManualClock) {
         let clock = ManualClock(date: now)
         let lock = FileManager.default.temporaryDirectory.appendingPathComponent("bikeguard-\(UUID().uuidString).lock")
-        let engine = RideEngine(store: store, clock: clock, reminders: scheduler, lockURL: lock)
+        let engine = RideEngine(store: store, clock: clock, center: scheduler, lockURL: lock)
         return (engine, clock)
     }
 }

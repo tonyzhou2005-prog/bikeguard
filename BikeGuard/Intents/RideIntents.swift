@@ -9,21 +9,19 @@ struct StartRideIntent: AppIntent {
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let outcome = RideEngine.shared.start()
+        let result = await RideEngine.shared.start()
         let settings = await UNUserNotificationCenter.current().notificationSettings()
-        let dialog: IntentDialog
-        switch (outcome, Self.notificationsEnabled(settings.authorizationStatus)) {
-        case (.started, true):
-            dialog = "已开始骑行提醒。免费时段 60 分钟，将在第 45、50、55 分钟提醒锁车。"
-        case (.started, false):
-            dialog = "已开始计时，但通知尚未允许。请打开 BikeGuard 并允许通知，否则到点不会提醒。"
-        case (.alreadyActive, _):
-            dialog = "骑行提醒已在进行中，未重新计时。"
-        }
-        return .result(dialog: dialog)
+        let dialog = StartRideDialog.message(
+            outcome: result.outcome,
+            registration: result.registration,
+            notificationsEnabled: StartRideDialog.notificationsEnabled(settings.authorizationStatus)
+        )
+        return .result(dialog: IntentDialog(stringLiteral: dialog))
     }
+}
 
-    private static func notificationsEnabled(_ status: UNAuthorizationStatus) -> Bool {
+enum StartRideDialog {
+    static func notificationsEnabled(_ status: UNAuthorizationStatus) -> Bool {
         switch status {
         case .authorized, .provisional, .ephemeral:
             return true
@@ -31,6 +29,43 @@ struct StartRideIntent: AppIntent {
             return false
         @unknown default:
             return false
+        }
+    }
+
+    static func message(
+        outcome: StartOutcome,
+        registration: ReminderRegistrationResult,
+        notificationsEnabled: Bool
+    ) -> String {
+        switch registration.status {
+        case .failed:
+            if outcome == .started {
+                return "已开始计时，但锁车提醒没有登记成功。请再次运行开始骑行提醒。"
+            }
+            return "骑行提醒已在进行中，未重新计时。锁车提醒没有登记成功，请再运行一次开始骑行提醒。"
+        case .partial:
+            if outcome == .started {
+                return "已开始计时，但只有部分锁车提醒登记成功。请再次运行开始骑行提醒，补上失败的提醒。"
+            }
+            return "骑行提醒已在进行中，未重新计时。仍有锁车提醒没有登记成功，请再运行一次。"
+        case .full:
+            if outcome == .alreadyActive {
+                if registration.addedOffsets.isEmpty {
+                    return "骑行提醒已在进行中，未重新计时。"
+                }
+                return "骑行提醒已在进行中，未重新计时。已补上尚未发出的锁车提醒。"
+            }
+            if !notificationsEnabled {
+                return "已开始计时，但通知尚未允许。请打开 BikeGuard 并允许通知，否则到点不会提醒。"
+            }
+            if registration.succeededOffsets == RidePolicy.reminderOffsets {
+                return "已开始骑行提醒。免费时段 60 分钟，将在第 45、50、55 分钟提醒锁车。"
+            }
+            if registration.succeededOffsets.isEmpty {
+                return "已开始计时。需要登记的锁车提醒都已过点，没有新的提醒。"
+            }
+            let minutes = registration.succeededOffsets.map { String(Int($0 / 60)) }.joined(separator: "、")
+            return "已开始骑行提醒。已登记第 \(minutes) 分钟的锁车提醒。"
         }
     }
 }
@@ -41,7 +76,7 @@ struct EndRideIntent: AppIntent {
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let dialog: IntentDialog = RideEngine.shared.end()
+        let dialog: IntentDialog = await RideEngine.shared.end()
             ? "已结束骑行提醒，并取消后续锁车通知。"
             : "当前没有进行中的骑行提醒。"
         return .result(dialog: dialog)

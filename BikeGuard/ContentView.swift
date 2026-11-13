@@ -92,12 +92,13 @@ struct ContentView: View {
     private func controls(_ snapshot: RideSnapshot) -> some View {
         VStack(spacing: 10) {
             Button {
-                switch engine.start() {
-                case .started:
-                    banner = "已开始。将在第 45、50、55 分钟提醒你确认锁车。"
-                    Task { await refreshReminders() }
-                case .alreadyActive:
-                    banner = "骑行仍在进行，开始时间未重置。"
+                Task {
+                    let result = await engine.start()
+                    banner = StartRideDialog.message(
+                        outcome: result.outcome,
+                        registration: result.registration,
+                        notificationsEnabled: StartRideDialog.notificationsEnabled(authorization)
+                    )
                 }
             } label: {
                 Label("开始骑行", systemImage: "play.fill")
@@ -107,8 +108,10 @@ struct ContentView: View {
             .tint(Color.accentColor)
 
             Button {
-                if engine.end() {
-                    banner = "已结束，尚未发出的锁车提醒已取消。"
+                Task {
+                    if await engine.end() {
+                        banner = "已结束，尚未发出的锁车提醒已取消。"
+                    }
                 }
             } label: {
                 Label("结束骑行", systemImage: "lock.fill")
@@ -141,7 +144,7 @@ struct ContentView: View {
             Text("计时规则")
                 .font(.headline)
             Text("美团骑行卡前 60 分钟免费。本应用不连接美团，也不联网，只在这台手机上计时。")
-            Text("骑行开始后的 90 分钟内（60 分钟免费时段，再加 30 分钟宽限），再次开始不会重置倒计时，也不会重复安排通知。超过 90 分钟后自动视为本趟已结束。")
+            Text("骑行开始后的 90 分钟内（60 分钟免费时段，再加 30 分钟宽限），再次开始不会重置倒计时。已经在等待发送的提醒不会重复安排；当时没登记上、而且尚未到点的，会补登记。超过 90 分钟后自动视为本趟已结束。")
             Text("手动结束后，下次开始是新的一趟。")
         }
         .font(.subheadline)
@@ -324,7 +327,7 @@ struct ContentView: View {
     private func refreshReminders() async {
         guard !TestRuntime.isUnitTest else { return }
         authorization = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
-        await RideReminderRepair.sync(snapshot: engine.snapshot())
+        await engine.repair()
     }
 }
 
