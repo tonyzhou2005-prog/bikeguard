@@ -128,7 +128,9 @@ final class NotificationReliabilityTests: XCTestCase {
         await center.waitUntilPendingReadPaused()
         let ended = await engine.end()
         XCTAssertTrue(ended)
-        clock.date = start.addingTimeInterval(10 * 60)
+        // Three minutes, not ten: a ten-minute shift makes the new 45-minute
+        // reminder land on the old ride's 55-minute fire time.
+        clock.date = start.addingTimeInterval(3 * 60)
         let restarted = await engine.start()
         XCTAssertEqual(restarted.outcome, .started)
         let newStart = try XCTUnwrap(engine.snapshot().session?.startedAt)
