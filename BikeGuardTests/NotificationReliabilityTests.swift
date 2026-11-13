@@ -99,13 +99,15 @@ final class NotificationReliabilityTests: XCTestCase {
     func testRepairPausedThenEndDoesNotRestoreNotifications() async {
         let center = PausableNotificationCenter()
         let (engine, _) = makeEngine(center: center)
-        XCTAssertEqual((await engine.start()).outcome, .started)
+        let started = await engine.start()
+        XCTAssertEqual(started.outcome, .started)
         XCTAssertEqual(center.pending.map(\.offset), offsets)
 
         center.pauseBeforeNextPendingRead()
         let repair = Task { await engine.repair() }
         await center.waitUntilPendingReadPaused()
-        XCTAssertTrue(await engine.end())
+        let ended = await engine.end()
+        XCTAssertTrue(ended)
         XCTAssertTrue(center.pending.isEmpty)
 
         center.resumePendingRead()
@@ -114,16 +116,18 @@ final class NotificationReliabilityTests: XCTestCase {
         XCTAssertEqual(engine.snapshot().phase, .endedManually)
     }
 
-    func testStaleRepairDoesNotOverwriteTheNextRide() async {
+    func testStaleRepairDoesNotOverwriteTheNextRide() async throws {
         let center = PausableNotificationCenter()
         let (engine, clock) = makeEngine(center: center)
-        XCTAssertEqual((await engine.start()).outcome, .started)
+        let started = await engine.start()
+        XCTAssertEqual(started.outcome, .started)
         let originalFires = center.pending.map(\.fireAt)
 
         center.pauseBeforeNextPendingRead()
         let repair = Task { await engine.repair() }
         await center.waitUntilPendingReadPaused()
-        XCTAssertTrue(await engine.end())
+        let ended = await engine.end()
+        XCTAssertTrue(ended)
         clock.date = start.addingTimeInterval(10 * 60)
         let restarted = await engine.start()
         XCTAssertEqual(restarted.outcome, .started)

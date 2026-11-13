@@ -213,7 +213,8 @@ final class RideEngineTests: XCTestCase {
     func testIdempotentRestartKeepsOriginalStartAndDoesNotReschedule() async {
         let scheduler = RecordingNotificationCenter()
         let (engine, clock) = makeEngine(now: start, scheduler: scheduler)
-        XCTAssertEqual((await engine.start()).outcome, .started)
+        let first = await engine.start()
+        XCTAssertEqual(first.outcome, .started)
         clock.date = start.addingTimeInterval(20 * 60)
         let second = await engine.start()
         XCTAssertEqual(second.outcome, .alreadyActive)
@@ -232,9 +233,11 @@ final class RideEngineTests: XCTestCase {
     func testEndCancelsRemindersAndPersists() async {
         let scheduler = RecordingNotificationCenter()
         let (engine, clock) = makeEngine(now: start, scheduler: scheduler)
-        XCTAssertEqual((await engine.start()).outcome, .started)
+        let started = await engine.start()
+        XCTAssertEqual(started.outcome, .started)
         clock.date = start.addingTimeInterval(15 * 60)
-        XCTAssertTrue(await engine.end())
+        let ended = await engine.end()
+        XCTAssertTrue(ended)
         let snapshot = engine.snapshot()
         XCTAssertEqual(snapshot.phase, .endedManually)
         XCTAssertEqual(snapshot.session?.endedAt, clock.date)
@@ -242,14 +245,16 @@ final class RideEngineTests: XCTestCase {
         XCTAssertFalse(snapshot.isActive)
         XCTAssertEqual(scheduler.cancelCount, 1)
         XCTAssertTrue(scheduler.pending.isEmpty)
-        XCTAssertFalse(await engine.end())
+        let endedAgain = await engine.end()
+        XCTAssertFalse(endedAgain)
         XCTAssertEqual(scheduler.cancelCount, 1)
     }
 
     func testEndWhenInactiveIsNoOp() async {
         let scheduler = RecordingNotificationCenter()
         let (engine, _) = makeEngine(now: start, scheduler: scheduler)
-        XCTAssertFalse(await engine.end())
+        let ended = await engine.end()
+        XCTAssertFalse(ended)
         XCTAssertEqual(scheduler.cancelCount, 0)
         XCTAssertTrue(scheduler.pending.isEmpty)
         XCTAssertEqual(scheduler.additionCount, 0)
@@ -262,7 +267,8 @@ final class RideEngineTests: XCTestCase {
         _ = await engine.start()
         clock.date = start.addingTimeInterval(80 * 60)
         XCTAssertTrue(engine.snapshot().isActive)
-        XCTAssertTrue(await engine.end())
+        let ended = await engine.end()
+        XCTAssertTrue(ended)
         XCTAssertEqual(engine.snapshot().phase, .endedManually)
         XCTAssertEqual(scheduler.cancelCount, 1)
     }
@@ -272,9 +278,11 @@ final class RideEngineTests: XCTestCase {
         let (engine, clock) = makeEngine(now: start, scheduler: scheduler)
         _ = await engine.start()
         clock.date = start.addingTimeInterval(5 * 60)
-        XCTAssertTrue(await engine.end())
+        let ended = await engine.end()
+        XCTAssertTrue(ended)
         clock.date = start.addingTimeInterval(6 * 60)
-        XCTAssertEqual((await engine.start()).outcome, .started)
+        let restarted = await engine.start()
+        XCTAssertEqual(restarted.outcome, .started)
         XCTAssertEqual(engine.snapshot().session?.startedAt, clock.date)
         XCTAssertEqual(scheduler.pending.map(\.fireAt), [
             clock.date.addingTimeInterval(45 * 60),
@@ -285,7 +293,8 @@ final class RideEngineTests: XCTestCase {
         clock.date = clock.date.addingTimeInterval(90 * 60)
         XCTAssertEqual(engine.snapshot().phase, .expiredAutomatically)
         let newStart = clock.date
-        XCTAssertEqual((await engine.start()).outcome, .started)
+        let restartedAgain = await engine.start()
+        XCTAssertEqual(restartedAgain.outcome, .started)
         XCTAssertEqual(engine.snapshot().session?.startedAt, newStart)
         XCTAssertEqual(scheduler.pending.map(\.fireAt), [
             newStart.addingTimeInterval(45 * 60),
@@ -320,7 +329,8 @@ final class RideEngineTests: XCTestCase {
         let store = UserDefaultsRideStore(defaults: defaults)
         let lock = FileManager.default.temporaryDirectory.appendingPathComponent("bikeguard-\(UUID().uuidString).lock")
         let engine = RideEngine(store: store, clock: clock, center: scheduler, lockURL: lock)
-        XCTAssertEqual((await engine.start()).outcome, .started)
+        let started = await engine.start()
+        XCTAssertEqual(started.outcome, .started)
 
         let data = try XCTUnwrap(defaults.data(forKey: UserDefaultsRideStore.storageKey))
         let decoded = try RideCoding.decoder.decode(RideSession.self, from: data)
@@ -364,7 +374,8 @@ final class RideEngineTests: XCTestCase {
         let second = RideEngine(store: store, clock: clock, center: secondCenter, lockURL: lock)
         XCTAssertEqual(second.snapshot().session?.startedAt, start)
         XCTAssertEqual(second.snapshot().remaining, 35 * 60, accuracy: 0.001)
-        XCTAssertEqual((await second.start()).outcome, .alreadyActive)
+        let secondStart = await second.start()
+        XCTAssertEqual(secondStart.outcome, .alreadyActive)
         XCTAssertEqual(second.snapshot().session?.startedAt, start)
     }
 
