@@ -1,6 +1,11 @@
 import Darwin
 import Foundation
 
+/// `Darwin.flock` is the `struct flock` initializer in the Swift overlay, not the
+/// POSIX lock function. Call the C symbol directly.
+@_silgen_name("flock")
+private func bikeguardPOSIXLock(_ fd: Int32, _ operation: Int32) -> Int32
+
 protocol RideClock {
     func now() -> Date
 }
@@ -82,9 +87,9 @@ final class RideEngine {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let fd = Darwin.open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         guard fd >= 0 else { return try body() }
-        Darwin.flock(fd, LOCK_EX)
+        _ = bikeguardPOSIXLock(fd, LOCK_EX)
         defer {
-            Darwin.flock(fd, LOCK_UN)
+            _ = bikeguardPOSIXLock(fd, LOCK_UN)
             Darwin.close(fd)
         }
         return try body()
