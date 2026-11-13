@@ -228,7 +228,7 @@ actor RideNotificationCoordinator {
     }
 
     private func withLock<T>(_ body: () throws -> T) rethrows -> T {
-        rideWithFileLock(lockURL, body)
+        try rideWithFileLock(lockURL, body)
     }
 
     private enum PreparedStart {
