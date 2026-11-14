@@ -20,7 +20,7 @@
 | 时刻 | 状态 | 再次「开始骑行提醒」 |
 | --- | --- | --- |
 | 尚未开始，或上一趟已手动结束 | 未在骑行 / 已结束 | 开始新的一趟，开始时间是现在 |
-| 开始后 0–60 分钟 | 骑行中，显示剩余时间 | **不重置**。保留原来的开始时间，不重新登记通知 |
+| 开始后 0–60 分钟 | 骑行中，显示剩余时间 | **不重置**。保留原来的开始时间。已经在系统里的未到点提醒不会重排；缺了的、而且还没到点的会补登记 |
 | 开始后 60–90 分钟 | 已超过免费时段（宽限） | **仍然不重置**。这 30 分钟用来避免你超时后刚打开美团就被当成新的一趟 |
 | 开始后满 90 分钟仍未手动结束 | 自动视为已结束 | 开始新的一趟 |
 
@@ -52,7 +52,7 @@ BikeGuardTests/RideLogicTests.swift
 
 部署目标 iOS 17.0。Bundle ID：`io.github.tonyzhou2005.bikeguard`。如果签名时提示标识符已被占用，在 Xcode 的 Signing 里改成你自己的，或改工程里的 `PRODUCT_BUNDLE_IDENTIFIER`。
 
-核心类型可以不启动界面来测：`RidePolicy` 是纯函数，`RideEngine` 接收 `RideClock`、`RideStoring` 和 `RideReminderScheduling`。
+核心类型可以不启动界面来测：`RidePolicy` 是纯函数，`RideEngine` 把开始、结束和补登记都交给 `RideNotificationCoordinator`，通知中心通过 `RideNotificationCenter` 注入。
 
 ## 快捷指令：打开美团时开始提醒
 
@@ -154,7 +154,15 @@ SideStore 需要配对文件或本地网络刷新；AltStore 需要 AltServer。
 - `testCorruptPersistenceIsTreatedAsNoRide`
 - `testMemoryStoreRoundTripAcrossEngines`
 
-这些测试覆盖：开始、进行中再次开始（含宽限期）不改开始时间且不重复登记通知、结束、剩余时间、满 60 分钟进入宽限、满 90 分钟自动结束、JSON / `UserDefaults` / 内存存储的往返，以及通知偏移正好是 45、50、55 分钟。
+`NotificationReliabilityTests`
+
+- `testRepairPausedThenEndDoesNotRestoreNotifications`
+- `testStaleRepairDoesNotOverwriteTheNextRide`
+- `testAddFailureIsPartialOrFailedAndRepairSkipsPastReminders`
+- `testInterruptedStartKeepsOriginalStartAndRestoresFutureReminders`
+- `testRepairUsesFreshClockAndSkipsRemindersThatBecamePastDuringAwait`
+
+这些测试覆盖：开始、进行中再次开始（含宽限期）不改开始时间、已经登记的提醒不重复提交、缺了的未到点提醒会补上、结束、剩余时间、满 60 分钟进入宽限、满 90 分钟自动结束、JSON / `UserDefaults` / 内存存储的往返，以及通知偏移正好是 45、50、55 分钟。另外覆盖通知登记的竞态：补登记在读取待发送通知时被挂起，期间结束或开始下一趟，恢复后不能把旧提醒写回去；某一次 `add` 失败时结果是部分成功或失败而不是成功；开始已写入但进程在 `add` 之前中断后，再次开始会保住原来的开始时间并补上还没到点的提醒；等待期间时钟跨过 45/50/55 分钟时，用恢复后的当前时间计算延迟，并且不再提交已经过点的提醒。
 
 CI 还验证了：工程能编过，并且能打出未签名 ipa。具体哪一次运行是绿的，以 GitHub Actions 页面为准。
 

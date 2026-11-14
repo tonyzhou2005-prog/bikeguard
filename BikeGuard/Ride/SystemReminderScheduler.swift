@@ -1,55 +1,78 @@
 import Foundation
 import UserNotifications
 
-final class SystemReminderScheduler: RideReminderScheduling {
-    func replaceReminders(with reminders: [RideReminderPlan]) {
-        let center = UNUserNotificationCenter.current()
+struct RideNotificationRequest: Equatable, Sendable {
+    var identifier: String
+    var offset: TimeInterval
+    var fireAt: Date
+    /// Delay passed to the system, computed from a fresh clock reading immediately before add.
+    var delay: TimeInterval
+    var title: String
+    var body: String
+}
+
+enum RideNotificationAddError: Error, Equatable, Sendable {
+    case rejected(offset: TimeInterval)
+}
+
+protocol RideNotificationCenter: AnyObject, Sendable {
+    func pendingIdentifiers() async -> Set<String>
+    func removePending(identifiers: [String]) async
+    func removeDelivered(identifiers: [String]) async
+    func add(_ request: RideNotificationRequest) async throws
+    func cancelReminders() async
+}
+
+extension RideNotificationCenter {
+    func cancelReminders() async {
+        await removePending(identifiers: RidePolicy.reminderIdentifiers)
+    }
+
+    func discardExistingReminders() async {
         let identifiers = RidePolicy.reminderIdentifiers
-        center.removePendingNotificationRequests(withIdentifiers: identifiers)
-        center.removeDeliveredNotifications(withIdentifiers: identifiers)
-        let now = Date()
-        for reminder in reminders {
-            Self.enqueue(reminder, now: now, center: center)
-        }
-    }
-
-    func cancelReminders() {
-        UNUserNotificationCenter.current()
-            .removePendingNotificationRequests(withIdentifiers: RidePolicy.reminderIdentifiers)
-    }
-
-    static func enqueue(_ reminder: RideReminderPlan, now: Date, center: UNUserNotificationCenter) {
-        let interval = reminder.fireAt.timeIntervalSince(now)
-        guard interval > 1 else { return }
-        let content = UNMutableNotificationContent()
-        content.title = reminder.title
-        content.body = reminder.body
-        content.sound = .default
-        content.threadIdentifier = "bikeguard.ride"
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)
-        let request = UNNotificationRequest(
-            identifier: reminder.identifier,
-            content: content,
-            trigger: trigger
-        )
-        center.add(request)
+        await removeDelivered(identifiers: identifiers)
+        await removePending(identifiers: identifiers)
     }
 }
 
-/// Fills in any reminder that never got scheduled (for example the ride was
-/// started before notification permission existed). Same identifiers, so this
-/// cannot stack a second copy of a reminder that is already pending.
-enum RideReminderRepair {
-    static func sync(snapshot: RideSnapshot) async {
-        let center = UNUserNotificationCenter.current()
-        guard snapshot.isActive, let startedAt = snapshot.session?.startedAt else {
-            center.removePendingNotificationRequests(withIdentifiers: RidePolicy.reminderIdentifiers)
-            return
-        }
-        let pending = await center.pendingNotificationRequests()
-        let pendingIDs = Set(pending.map(\.identifier))
-        for reminder in RidePolicy.reminders(forStart: startedAt) where !pendingIDs.contains(reminder.identifier) {
-            SystemReminderScheduler.enqueue(reminder, now: snapshot.now, center: center)
+final class SystemRideNotificationCenter: RideNotificationCenter, @unchecked Sendable {
+    func pendingIdentifiers() async -> Set<String> {
+        let requests = await UNUserNotificationCenter.current().pendingNotificationRequests()
+        return Set(requests.map(\.identifier))
+    }
+
+    func removePending(identifiers: [String]) async {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
+    func removeDelivered(identifiers: [String]) async {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+
+    func cancelReminders() async {
+        await removePending(identifiers: RidePolicy.reminderIdentifiers)
+    }
+
+    func add(_ request: RideNotificationRequest) async throws {
+        let content = UNMutableNotificationContent()
+        content.title = request.title
+        content.body = request.body
+        content.sound = .default
+        content.threadIdentifier = "bikeguard.ride"
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: request.delay, repeats: false)
+        let notification = UNNotificationRequest(
+            identifier: request.identifier,
+            content: content,
+            trigger: trigger
+        )
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            UNUserNotificationCenter.current().add(notification) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
         }
     }
 }
